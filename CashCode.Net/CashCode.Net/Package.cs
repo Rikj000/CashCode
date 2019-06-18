@@ -9,18 +9,18 @@ namespace CashCode.Net
 
     public sealed class Package
     {
-        #region Поля
-        
-        private const int POLYNOMIAL =  0x08408;     // Необходима для расчета CRC
-        private const byte _Sync =      0x02;        // Бит синхронизации (фиксированный)
-        private const byte _Adr =       0x03;        // Переферийный адрес оборования. Для купюропиемника из документации равен 0x03
+        #region Fields
+
+        private const int POLYNOMIAL =  0x08408;     // Needed to calculate CRC
+        private const byte _Sync =      0x02;        // Synchronization bit (fixed)
+        private const byte _Adr =       0x03;        // The peripheral address of the equipment. For the bill acceptor from the documentation is 0x03
 
         private byte _Cmd;
         private byte[] _Data;
 
         #endregion
 
-        #region Конструктор класса
+        #region Class constructor
 
         public Package()
         {}
@@ -33,7 +33,7 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Свойства
+        #region Properties
 
         public byte Cmd
         {
@@ -60,28 +60,28 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Методы
+        #region Methods
 
-        // Возвращает массив байтов пакета
+        // Returns an array of packet bytes.
         public byte[] GetBytes()
         {
-            // Буффер пакета (без 2-х байт CRC). Первые четыре байта это SYNC, ADR, LNG, CMD
+            // Package buffer (without 2 bytes CRC). The first four bytes are SYNC, ADR, LNG, CMD
             List<byte> Buff = new List<byte>();
-            
-            // Байт 1: Флаг синхронизации
+
+            // Byte 1: Sync flag
             Buff.Add(_Sync);
 
-            // Байт 2: адрес устройства
+            // Byte 2: device address
             Buff.Add(_Adr);
 
-            // Байт 3: длина пакета
-            // рассчитаем длину пакета
+            // Byte 3: packet length
+            // calculate the packet length
             int result = this.GetLength();
 
-            // Если длина пакета вместе с байтами SYNC, ADR, LNG, CRC, CMD  больше 250
+            // If the packet length with SYNC, ADR, LNG, CRC, CMD bytes is more than 250
             if (result > 250)
             {
-                // то делаем байт длины равный 0, а действительная длина сообщения будет в DATA
+                // then we make the length byte equal to 0, and the actual length of the message will be in DATA
                 Buff.Add(0);
             }
             else
@@ -89,27 +89,36 @@ namespace CashCode.Net
                 Buff.Add(Convert.ToByte(result));
             }
 
-            // Байт 4: Команда
+            // Byte 4: Team
             Buff.Add(this._Cmd);
 
-            // Байт 4: Команда
+            // Byte 4: Team
             if (this._Data != null)
             {
                 for (int i = 0; i < _Data.Length; i++)
                 { Buff.Add(this._Data[i]); }
             }
 
-            // Последний байт - CRC
+            // Last byte - CRC
             byte[] CRC = BitConverter.GetBytes(GetCRC16(Buff.ToArray(), Buff.Count));
 
-            byte[] package = new byte[Buff.Count + CRC.Length];
-            Buff.ToArray().CopyTo(package, 0);
-            CRC.CopyTo(package, Buff.Count);
+            byte[] tempPackage = new byte[Buff.Count + CRC.Length];
+            Buff.ToArray().CopyTo(tempPackage, 0);
+            CRC.CopyTo(tempPackage, Buff.Count);
+
+            // Remove trailing zero's
+            var l = tempPackage.Length - 1;
+            while (tempPackage[l] == 0)
+            {
+                --l;
+            }
+            var package = new byte[l + 1];
+            Array.Copy(tempPackage, package, l + 1);
 
             return package;
         }
 
-        // Возвращает строку шестнадцатиричного представления байтов пакета
+        // Returns a hexadecimal string of packet bytes
         public string GetBytesHex()
         {
             byte[] package = GetBytes();
@@ -123,13 +132,13 @@ namespace CashCode.Net
             return "0x" + hexString.ToString();
         }
 
-        // Длина пакета
+        // Package length
         public int GetLength()
         {
             return (this._Data == null ? 0 : this._Data.Length) + 6;
         }
 
-        // Расчет контрольной суммы
+        // Checksum calculation
         private static int GetCRC16(byte[] BufData, int SizeData)
         {
             int TmpCRC, CRC;
@@ -157,7 +166,7 @@ namespace CashCode.Net
 
             byte[] OldCRC = new byte[] { Buff[Buff.Length - 2], Buff[Buff.Length - 1]};
 
-            // Два последних байта в длине убираем, так как это исходная CRC
+            // The last two bytes in length are removed, since this is the original CRC
             byte[] NewCRC = BitConverter.GetBytes(GetCRC16(Buff, Buff.Length - 2));
 
             for (int i = 0; i < 2; i++)
@@ -174,23 +183,23 @@ namespace CashCode.Net
 
         public static byte[] CreateResponse(ResponseType type)
         {
-            // Буффер пакета (без 2-х байт CRC). Первые четыре байта это SYNC, ADR, LNG, CMD
+            // Packet buffer (without 2 bytes CRC). The first four bytes are SYNC, ADR, LNG, CMD
             List<byte> Buff = new List<byte>();
 
-            // Байт 1: Флаг синхронизации
+            // Byte 1: Sync flag
             Buff.Add(_Sync);
 
-            // Байт 2: адрес устройства
+            // Byte 2: device address
             Buff.Add(_Adr);
 
-            // Байт 3: длина пакета, всегда 6
+            // Byte 3: packet length, always 6
             Buff.Add(0x06);
-           
-            // Байт 4: Данные
+
+            // Byte 4: Data
             if (type == ResponseType.ACK) { Buff.Add(0x00); }
             else if (type == ResponseType.NAK) { Buff.Add(0xFF); }
 
-            // Последний байт - CRC
+            // Last byte - CRC
             byte[] CRC = BitConverter.GetBytes(GetCRC16(Buff.ToArray(), Buff.Count));
 
             byte[] package = new byte[Buff.Count + CRC.Length];

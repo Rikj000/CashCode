@@ -1,39 +1,45 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Ports;
 using System.Linq;
+using System.Text;
 using System.Threading;
+using static System.Net.Mime.MediaTypeNames;
 
 namespace CashCode.Net
 {
-    public enum BillValidatorCommands { ACK=0x00, NAK=0xFF, POLL=0x33, RESET=0x30, GET_STATUS=0x31, SET_SECURITY=0x32,
-                                        IDENTIFICATION=0x37, ENABLE_BILL_TYPES=0x34, STACK=0x35, RETURN=0x36, HOLD=0x38}
+    public enum BillValidatorCommands
+    {
+        ACK = 0x00, NAK = 0xFF, POLL = 0x33, RESET = 0x30, GET_STATUS = 0x31, SET_SECURITY = 0x32,
+        IDENTIFICATION = 0x37, ENABLE_BILL_TYPES = 0x34, STACK = 0x35, RETURN = 0x36, HOLD = 0x38
+    }
 
-    public enum BillRecievedStatus {Accepted, Rejected };
+    public enum BillRecievedStatus { Accepted, Rejected };
 
     public enum BillCassetteStatus { Inplace, Removed };
 
-    // Делегат события получения банкноты
+    // Delegate for receiving banknote events
     public delegate void BillReceivedHandler(object Sender, BillReceivedEventArgs e);
 
-    // Делегат события для контроля за кассетой
+    // Event delegate to control the tape
     public delegate void BillCassetteHandler(object Sender, BillCassetteEventArgs e);
 
-    // Делегат события в процессе отправки купюры в стек (Здесь можно делать возврат)
+    // Event delegate in the process of sending notes to the stack (You can return here)
     public delegate void BillStackingHandler(object Sender, BillStackedEventArgs e);
 
     public sealed class CashCodeBillValidator : IDisposable
     {
-        #region Закрытые члены
-        
-        private const int POLL_TIMEOUT = 200;    // Тайм-аут ожидания ответа от считывателя
-        private const int EVENT_WAIT_HANDLER_TIMEOUT = 10000; // Тайм-аут ожидания снятия блокировки
+        #region Closed members
+
+        private const int POLL_TIMEOUT = 200;    // Timeout waiting for a response from the reader
+        private const int EVENT_WAIT_HANDLER_TIMEOUT = 10000; // Timeout waiting for unlocking
 
         private byte[] ENABLE_BILL_TYPES_WITH_ESCROW = new byte[6] { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 
-        private EventWaitHandle _SynchCom;     // Переменная синхронизации отправки и считывания данных с ком порта
-        private List<byte> _ReceivedBytes;  // Полученные байты
+        private EventWaitHandle _SynchCom;     // Variable synchronization of sending and reading data from the com port
+        private List<byte> _ReceivedBytes;  // Bytes received
 
         private int _LastError;
         private bool _Disposed;
@@ -48,26 +54,26 @@ namespace CashCode.Net
         private SerialPort _ComPort;
         private CashCodeErroList _ErrorList;
 
-        private System.Timers.Timer _Listener;  // Таймер прослушивания купюроприемника
+        private System.Timers.Timer _Listener;  // Bill acceptor listening timer
 
         bool _ReturnBill;
 
         BillCassetteStatus _cassettestatus = BillCassetteStatus.Inplace;
         #endregion
 
-        #region Конструкторы
+        #region Constructors
 
         public CashCodeBillValidator(string PortName, int BaudRate)
         {
             this._ErrorList = new CashCodeErroList();
-            
+
             this._Disposed = false;
             this._IsEnableBills = false;
             this._ComPortName = "";
             this._Locker = new object();
             this._IsConnected = this._IsPowerUp = this._IsListening = this._ReturnBill = false;
 
-            // Из спецификации:
+            // From the specification:
             //      Baud Rate:	9600 bps/19200 bps (no negotiation, hardware selectable)
             //      Start bit:	1
             //      Data bit:	8 (bit 0 = LSB, bit 0 sent first)
@@ -92,35 +98,35 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Деструктор
+        #region Destructor
 
-        // Деструктор для финализации кода
+        // Destructor for code finalization
         ~CashCodeBillValidator() { Dispose(false); }
 
-        // Реализует интерфейс IDisposable
+        // Implements interface IDisposable
         public void Dispose()
         {
             Dispose(true);
-            GC.SuppressFinalize(this); // Прикажем GC не финализировать объект после вызова Dispose, так как он уже освобожден
+            GC.SuppressFinalize(this); // Let's tell the GC not to finalize the object after calling Dispose, since it has already been released.
         }
 
-        // Dispose(bool disposing) выполняется по двум сценариям
-        // Если disposing=true, метод Dispose вызывается явно или неявно из кода пользователя
-        // Управляемые и неуправляемые ресурсы могут быть освобождены
-        // Если disposing=false, то метод может быть вызван runtime из финализатора
-        // В таком случае только неуправляемые ресурсы могут быть освобождены.
+        // Dispose (bool disposing) is performed in two scenarios
+        // If disposing = true, the Dispose method is called explicitly or implicitly from user code
+        // Managed and unmanaged resources can be released.
+        // If disposing = false, then the method can be called runtime from the finalizer
+        // In this case, only unmanaged resources can be released.
         private void Dispose(bool disposing)
         {
-            // Проверим вызывался ли уже метод Dispose
+            // Check if Dispose was already called
             if (!this._Disposed)
             {
-                // Если disposing=true, освободим все управляемые и неуправляемые ресурсы
+                // If disposing = true, free all managed and unmanaged resources.
                 if (disposing)
                 {
-                    // Здесь освободим управляемые ресурсы
+                    // Here we release the managed resources.
                     try
                     {
-                        // Останови таймер, если он работает
+                        // Stop the timer if it works
                         if (this._IsListening)
                         {
                             this._Listener.Enabled = this._IsListening = false;
@@ -128,18 +134,24 @@ namespace CashCode.Net
 
                         this._Listener.Dispose();
 
-                        // Отприм сигнал выключения на купюроприемник
+                        // Send off signal to bill acceptor
                         if (this._IsConnected)
                         {
                             this.DisableBillValidator();
                         }
                     }
-                    catch { }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine("Exception=" + e.StackTrace);
+                        Console.WriteLine("Exception message=" + e.Message);
+
+                        bool bstop = true;
+                    }
                 }
 
-                // Высовем соответствующие методы для освобождения неуправляемых ресурсов
-                // Если disposing=false, то только следующий код буде выполнен
-                try 
+                // Out the appropriate methods to release unmanaged resources
+                // If disposing = false, then only the following code will be executed.
+                try
                 {
                     this._ComPort.Close();
                 }
@@ -151,8 +163,8 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Свойства
-        
+        #region Properties
+
         public bool IsConnected
         {
             get { return _IsConnected; }
@@ -160,21 +172,21 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Открытые методы
+        #region Open methods
 
         /// <summary>
-        /// Начало прослушки купюроприемника
+        /// Start wiretapping bill acceptor
         /// </summary>
         public void StartListening()
         {
-            // Если не подключен
+            // If not connected
             if (!this._IsConnected)
             {
                 this._LastError = 100020;
                 throw new System.IO.IOException(this._ErrorList.Errors[this._LastError]);
             }
 
-            // Если отсутствует энергия, то включим
+            // If there is no energy, then turn on
             if (!this._IsPowerUp) { this.PowerUpBillValidator(); }
 
             this._IsListening = true;
@@ -182,7 +194,7 @@ namespace CashCode.Net
         }
 
         /// <summary>
-        /// Остановк прослушки купюроприемника
+        /// Stop listening to the bill acceptor
         /// </summary>
         public void StopListening()
         {
@@ -192,7 +204,7 @@ namespace CashCode.Net
         }
 
         /// <summary>
-        /// Открытие Ком-порта для работы с купюроприемником
+        /// Opening of the Com-port for work with the bill acceptor
         /// </summary>
         /// <returns></returns>
         public int ConnectBillValidator()
@@ -202,21 +214,23 @@ namespace CashCode.Net
                 this._ComPort.Open();
                 this._IsConnected = true;
             }
-            catch
+            catch (Exception e)
             {
+                Console.WriteLine("Exception stacktrace=" + e.StackTrace);
+                Console.WriteLine("Exception message=" + e.Message);
                 this._IsConnected = false;
-               this._LastError = 100010;
+                this._LastError = 100010;
             }
 
             return this._LastError;
         }
 
-        // Включение купюроприемника
+        // Turn on bill acceptor
         public int PowerUpBillValidator()
         {
             List<byte> ByteResult = null;
 
-            // Если ком-порт не открыт
+            // If the com-port is not open
             if (!this._IsConnected)
             {
                 this._LastError = 100020;
@@ -226,28 +240,28 @@ namespace CashCode.Net
             // POWER UP
             ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
-            // Проверим результат
+            // Check the result
             if (CheckPollOnError(ByteResult.ToArray()))
             {
                 this.SendCommand(BillValidatorCommands.NAK);
                 throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
             }
 
-            // Иначе отправляем сигнал подтверждения
+            // Otherwise, send a confirmation signal
             this.SendCommand(BillValidatorCommands.ACK);
 
             // RESET
             ByteResult = this.SendCommand(BillValidatorCommands.RESET).ToList();
 
-            //Если не получили от купюроприемника сигнала ACK
-            if (ByteResult[3] != 0x00)
+            //If you have not received the ACK signal from the bill acceptor
+            if (ByteResult.Count > 3 && ByteResult[3] != 0x00)
             {
                 this._LastError = 100050;
                 return this._LastError;
             }
 
             // INITIALIZE
-            // Далее снова опрашиваем купюроприемник
+            // Then again we interrogate the bill acceptor
             ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
             if (CheckPollOnError(ByteResult.ToArray()))
@@ -256,27 +270,30 @@ namespace CashCode.Net
                 throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
             }
 
-            // Иначе отправляем сигнал подтверждения
+            // Otherwise, send a confirmation signal
             this.SendCommand(BillValidatorCommands.ACK);
 
             // GET STATUS
             ByteResult = this.SendCommand(BillValidatorCommands.GET_STATUS).ToList();
 
-            // Команда GET STATUS возвращает 6 байт ответа. Если все равны 0, то статус ok и можно работать дальше, иначе ошибка
-            if (ByteResult[3] != 0x00 || ByteResult[4] != 0x00 || ByteResult[5] != 0x00 ||
-                ByteResult[6] != 0x00 || ByteResult[7] != 0x00 || ByteResult[8] != 0x00)
+            // The GET STATUS command returns 6 bytes of response. If all are 0, then the status is ok and you can continue working, otherwise the error
+            if (ByteResult.Count > 8)
             {
-                this._LastError = 100070;
-                throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
+                if (ByteResult[3] != 0x00 || ByteResult[4] != 0x00 || ByteResult[5] != 0x00 ||
+                    ByteResult[6] != 0x00 || ByteResult[7] != 0x00 || ByteResult[8] != 0x00)
+                {
+                    this._LastError = 100070;
+                    throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
+                }
             }
 
             this.SendCommand(BillValidatorCommands.ACK);
 
-            // SET_SECURITY (в тестовом примере отправояет 3 байта (0 0 0)
+            // SET_SECURITY (in the test case it sends 3 bytes (0 0 0)
             ByteResult = this.SendCommand(BillValidatorCommands.SET_SECURITY, new byte[3] { 0x00, 0x00, 0x00 }).ToList();
 
-            //Если не получили от купюроприемника сигнала ACK
-            if (ByteResult[3] != 0x00)
+            //If you have not received a signal from the bill acceptor ACK
+            if (ByteResult.Count > 3 && ByteResult[3] != 0x00)
             {
                 this._LastError = 100050;
                 return this._LastError;
@@ -288,31 +305,31 @@ namespace CashCode.Net
 
 
             // POLL
-            // Далее снова опрашиваем купюроприемник. Должны получить команду INITIALIZE
+            // Then again we interrogate the bill acceptor. Must get the command INITIALIZE
             ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
-            // Проверим результат
+            // Check the result
             if (CheckPollOnError(ByteResult.ToArray()))
             {
                 this.SendCommand(BillValidatorCommands.NAK);
                 throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
             }
 
-            // Иначе отправляем сигнал подтверждения
+            // Otherwise, send a confirmation signal
             this.SendCommand(BillValidatorCommands.ACK);
 
             // POLL
-            // Далее снова опрашиваем купюроприемник. Должны получить команду UNIT DISABLE
+            // Then again we interrogate the bill acceptor. Must receive UNIT DISABLE command
             ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
-            // Проверим результат
+            // Check the result
             if (CheckPollOnError(ByteResult.ToArray()))
             {
                 this.SendCommand(BillValidatorCommands.NAK);
                 throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
             }
 
-            // Иначе отправляем сигнал подтверждения
+            // Otherwise, send a confirmation signal
             this.SendCommand(BillValidatorCommands.ACK);
 
             this._IsPowerUp = true;
@@ -320,12 +337,12 @@ namespace CashCode.Net
             return this._LastError;
         }
 
-        // Включение режима приема купюр
+        // Enable billing mode
         public int EnableBillValidator()
         {
             List<byte> ByteResult = null;
 
-            // Если ком-порт не открыт
+            // If the com-port is not open
             if (!this._IsConnected)
             {
                 this._LastError = 100020;
@@ -336,34 +353,34 @@ namespace CashCode.Net
             {
                 if (!_IsListening)
                 {
-                    throw new InvalidOperationException("Ошибка метода включения приема купюр. Необходимо вызвать метод StartListening.");
+                    throw new InvalidOperationException("Error method of accepting bills. You must call the StartListening method.");
                 }
 
                 lock (_Locker)
                 {
                     _IsEnableBills = true;
 
-                    // отпавить команду ENABLE BILL TYPES (в тестовом примере отправляет 6 байт  (255 255 255 0 0 0) Функция удержания включена (Escrow)
+                    // send the ENABLE BILL TYPES command (in the test example, it sends 6 bytes (255 255 255 0 0 0) The hold function is on (Escrow)
                     ByteResult = this.SendCommand(BillValidatorCommands.ENABLE_BILL_TYPES, ENABLE_BILL_TYPES_WITH_ESCROW).ToList();
 
-                    //Если не получили от купюроприемника сигнала ACK
-                    if (ByteResult[3] != 0x00)
+                    //If you have not received the ACK signal from the bill acceptor
+                    if (ByteResult.Count > 3 && ByteResult[3] != 0x00)
                     {
                         this._LastError = 100050;
                         throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
                     }
 
-                    // Далее снова опрашиваем купюроприемник
+                    // Then again we interrogate the bill acceptor
                     ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
-                    // Проверим результат
+                    // Check the result
                     if (CheckPollOnError(ByteResult.ToArray()))
                     {
                         this.SendCommand(BillValidatorCommands.NAK);
                         throw new System.ArgumentException(this._ErrorList.Errors[this._LastError]);
                     }
 
-                    // Иначе отправляем сигнал подтверждения
+                    // Otherwise, send a confirmation signal
                     this.SendCommand(BillValidatorCommands.ACK);
                 }
             }
@@ -375,14 +392,14 @@ namespace CashCode.Net
             return this._LastError;
         }
 
-        // Выключение режима приема купюр
+        // Turn off the reception of bills
         public int DisableBillValidator()
         {
             List<byte> ByteResult = null;
 
             lock (_Locker)
             {
-                // Если ком-порт не открыт
+                // If the com-port is not open
                 if (!this._IsConnected)
                 {
                     this._LastError = 100020;
@@ -391,12 +408,12 @@ namespace CashCode.Net
 
                 _IsEnableBills = false;
 
-                // отпавить команду ENABLE BILL TYPES (в тестовом примере отправояет 6 байт (0 0 0 0 0 0)
+                // send the ENABLE BILL TYPES command (in the test case it sends 6 bytes (0 0 0 0 0 0)
                 ByteResult = this.SendCommand(BillValidatorCommands.ENABLE_BILL_TYPES, new byte[6] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }).ToList();
             }
 
-            //Если не получили от купюроприемника сигнала ACK
-            if (ByteResult[3] != 0x00)
+            //If you have not received the ACK signal from the bill acceptor
+            if (ByteResult.Count > 3 && ByteResult[3] != 0x00)
             {
                 this._LastError = 100050;
                 return this._LastError;
@@ -407,58 +424,61 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Закрытые методы
+        #region Closed methods
 
         private bool CheckPollOnError(byte[] ByteResult)
         {
             bool IsError = false;
 
-            //Если не получили от купюроприемника третий байт равный 30Н (ILLEGAL COMMAND )
+            if (ByteResult.Length < 3)
+                return IsError;
+
+            //If you have received the third byte from the bill acceptor equal to 30Н (ILLEGAL COMMAND)
             if (ByteResult[3] == 0x30)
             {
                 this._LastError = 100040;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 41Н (Drop Cassette Full)
+            //If you have received the third byte from the bill acceptor equal to 41Н (Drop Cassette Full)
             else if (ByteResult[3] == 0x41)
             {
                 this._LastError = 100080;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 42Н (Drop Cassette out of position)
+            // If you have received the third byte from the bill acceptor equal to 42Н (Drop Cassette out of position)
             else if (ByteResult[3] == 0x42)
             {
                 this._LastError = 100070;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 43Н (Validator Jammed)
+            //If you have received the third byte from the bill acceptor equal to 43Н (Validator Jammed)
             else if (ByteResult[3] == 0x43)
             {
                 this._LastError = 100090;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 44Н (Drop Cassette Jammed)
+            //If you have received the third byte from the bill acceptor equal to 44Н (Drop Cassette Jammed)
             else if (ByteResult[3] == 0x44)
             {
                 this._LastError = 100100;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 45Н (Cheated)
+            //If you have received the third byte from the bill acceptor equal to 45Н (Cheated)
             else if (ByteResult[3] == 0x45)
             {
                 this._LastError = 100110;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 46Н (Pause)
+            //If you have received the third byte from the bill acceptor equal to 46Н (Pause)
             else if (ByteResult[3] == 0x46)
             {
                 this._LastError = 100120;
                 IsError = true;
             }
-            //Если не получили от купюроприемника третий байт равный 47Н (Generic Failure codes)
+            //If you have received the third byte from the bill acceptor equal to 47Н (Generic Failure codes)
             else if (ByteResult[3] == 0x47)
             {
-                if (ByteResult[4] == 0x50) { this._LastError = 100130; }        // Stack Motor Failure
+                if (ByteResult[4] == 0x50) { this._LastError = 100130; }          // Stack Motor Failure
                 else if (ByteResult[4] == 0x51) { this._LastError = 100140; }   // Transport Motor Speed Failure
                 else if (ByteResult[4] == 0x52) { this._LastError = 100150; }   // Transport Motor Failure
                 else if (ByteResult[4] == 0x53) { this._LastError = 100160; }   // Aligning Motor Failure
@@ -472,19 +492,19 @@ namespace CashCode.Net
             return IsError;
         }
 
-        
 
-        // Отправка команды купюроприемнику
+
+        // Sending a command to a bill acceptor
         private byte[] SendCommand(BillValidatorCommands cmd, byte[] Data = null)
         {
             if (cmd == BillValidatorCommands.ACK || cmd == BillValidatorCommands.NAK)
             {
                 byte[] bytes = null;
-                
+
                 if (cmd == BillValidatorCommands.ACK) { bytes = Package.CreateResponse(ResponseType.ACK); }
                 if (cmd == BillValidatorCommands.NAK) { bytes = Package.CreateResponse(ResponseType.NAK); }
 
-                if (bytes != null) {this._ComPort.Write(bytes, 0, bytes.Length);}
+                if (bytes != null) { this._ComPort.Write(bytes, 0, bytes.Length); }
 
                 return null;
             }
@@ -496,19 +516,47 @@ namespace CashCode.Net
                 if (Data != null) { package.Data = Data; }
 
                 byte[] CmdBytes = package.GetBytes();
+
+                // Log sended bytes to debugger
+                string strCmdBytes = "";
+                foreach (var b in CmdBytes)
+                {
+                    strCmdBytes += b.ToString("X") + ", ";
+                }
+                Debug.WriteLine("Sended command: " + strCmdBytes);
+                // --------------------------------
+
+                /*byte[] temp = new byte[6];
+                for (int i = 0; i < 6; i++)
+                {
+                    temp[i] = CmdBytes[i];
+                }
+
+                this._ComPort.Write(temp, 0, 6);*/
                 this._ComPort.Write(CmdBytes, 0, CmdBytes.Length);
 
-                // Подождем пока получим данные с ком-порта
+                // Let's wait while we receive data from a com-port
                 this._SynchCom.WaitOne(EVENT_WAIT_HANDLER_TIMEOUT);
                 this._SynchCom.Reset();
 
                 byte[] ByteResult = this._ReceivedBytes.ToArray();
 
-                // Если CRC ок, то проверим четвертый бит с результатом
-                // Должны уже получить данные с ком-порта, поэтому проверим CRC
-                if (ByteResult.Length == 0 || !Package.CheckCRC(ByteResult))
+                // Log recieved bytes to debugger
+                string strByteResult = "";
+                foreach (var b in ByteResult)
                 {
-                    throw new ArgumentException("Несоответствие контрольной суммы полученного сообщения. Возможно устройство не подключено к COM-порту. Проверьте настройки подключения.");
+                    strByteResult += b.ToString("X") + ", ";
+                }
+                Debug.WriteLine("Recieved command: " + strByteResult);
+                // --------------------------------
+
+                // If CRC is OK, then check the fourth bit with the result
+                // Must already get data from the com-port, so check the CRC
+
+                //if (ByteResult.Length == 0 || !Package.CheckCRC(ByteResult))
+                if (ByteResult.Length == 0)
+                {
+                    throw new ArgumentException("Mismatch of the checksum of the received message. The device may not be connected to the COM port. Check connection settings");
                 }
 
                 return ByteResult;
@@ -516,30 +564,39 @@ namespace CashCode.Net
 
         }
 
-        // Таблица кодов валют
+        // Table of currency codes
         private int CashCodeTable(byte code)
         {
             int result = 0;
 
-            if (code == 0x02) { result = 10; }          // 10 р.
-            else if (code == 0x03) { result = 50; }     // 50 р.
+            /*if (code == 0x02) { result = 10; }             // 10 р.
+            else if (code == 0x03) { result = 50; }      // 50 р.
             else if (code == 0x04) { result = 100; }    // 100 р.
             else if (code == 0x0c) { result = 200; }    // 200 р.
             else if (code == 0x05) { result = 500; }    // 500 р.
-            else if (code == 0x06) { result = 1000; }   // 1000 р.
-            else if (code == 0x0d) { result = 2000; }   // 2000 р.
-            else if (code == 0x07) { result = 5000; }   // 5000 р.
+            else if (code == 0x06) { result = 1000; }  // 1000 р.
+            else if (code == 0x0d) { result = 2000; }  // 2000 р.
+            else if (code == 0x07) { result = 5000; }  // 5000 р.*/
+
+            if (code == 0x02) { result = 5; }             // €5.
+            else if (code == 0x03) { result = 10; }    // €10
+            else if (code == 0x04) { result = 20; }    // €20
+            else if (code == 0x05) { result = 50; }    // €50
+            else if (code == 0x06) { result = 100; }  // €100
+            else if (code == 0x07) { result = 200; }  // €200
+            else if (code == 0x08) { result = 500; }  // €500
 
             return result;
         }
 
         #endregion
 
-        #region События
+        #region Events
 
         /// <summary>
-        /// Событие получения купюры
+        /// Event receiving bills
         /// </summary>
+
         public event BillReceivedHandler BillReceived;
 
         private void OnBillReceived(BillReceivedEventArgs e)
@@ -561,7 +618,7 @@ namespace CashCode.Net
 
 
         /// <summary>
-        /// Событие процесса отправки купюры в стек (Здесь можно делать возврат)
+        /// Event of the process of sending notes to the stack (Here you can return)
         /// </summary>
         public event BillStackingHandler BillStacking;
 
@@ -587,26 +644,26 @@ namespace CashCode.Net
 
         #endregion
 
-        #region Обработчики событий
+        #region Event handlers
 
-        // Получение данных с ком-порта
+        // Getting data from com-port
         private void _ComPort_DataReceived(object sender, SerialDataReceivedEventArgs e)
         {
-            // Заснем на 100 мс, дабы дать программе получить все данные с ком-порта
+            // Let us fall asleep for 100 ms in order to give the program all the data from the com-port
             Thread.Sleep(100);
             this._ReceivedBytes.Clear();
-
-            // Читаем байты
+            
+            //Read bytes
             while (_ComPort.BytesToRead > 0)
             {
                 this._ReceivedBytes.Add((byte)_ComPort.ReadByte());
             }
-
-            // Снимаем блокировку
+            
+            // Remove the lock
             this._SynchCom.Set();
         }
 
-        // Таймер прослушки купюроприемника
+        // Timer of wiretapping bill acceptor
         private void _Listener_Elapsed(object sender, System.Timers.ElapsedEventArgs e)
         {
             this._Listener.Stop();
@@ -617,89 +674,89 @@ namespace CashCode.Net
                 {
                     List<byte> ByteResult = null;
 
-                    // отпавить команду POLL
+                    // send a POLL command
                     ByteResult = this.SendCommand(BillValidatorCommands.POLL).ToList();
 
-                    // Если четвертый бит не Idling (незанятый), то идем дальше
+                    // If the fourth bit is not Idling (idle), then go ahead
                     if (ByteResult[3] != 0x14)
                     {
                         // ACCEPTING
-                        //Если получили ответ 15H (Accepting)
+                        //If your recieved answer 15H (Accepting)
                         if (ByteResult[3] == 0x15)
                         {
-                            // Подтверждаем
+                            // We confirm
                             this.SendCommand(BillValidatorCommands.ACK);
                         }
 
                         // ESCROW POSITION  
-                        // Если четвертый бит 1Сh (Rejecting), то купюроприемник не распознал купюру
+                        // If the fourth bit is 1Сh (Rejecting), then the bill acceptor did not recognize the bill
                         else if (ByteResult[3] == 0x1C)
                         {
-                            // Принялии какую-то купюру
+                            // Accept some kind of bill
                             this.SendCommand(BillValidatorCommands.ACK);
 
                             OnBillReceived(new BillReceivedEventArgs(BillRecievedStatus.Rejected, 0, this._ErrorList.Errors[ByteResult[4]]));
                         }
 
                         // ESCROW POSITION
-                        // купюра распознана
+                        // bill recognized
                         else if (ByteResult[3] == 0x80)
                         {
-                            // Подтветждаем
+                            // Welcome
                             this.SendCommand(BillValidatorCommands.ACK);
 
-                            // Событие, что купюра в процессе отправки в стек
+                            // The event that the bill in the process of sending to the stack
                             OnBillStacking(new BillStackedEventArgs(CashCodeTable(ByteResult[4])));
 
-                            // Если программа отвечает возвратом, то на возврат
+                            // If the program responds with a return, then the return
                             if (this._ReturnBill)
                             {
                                 // RETURN
-                                // Если программа отказывает принимать купюру, отправим RETURN
+                                // If the program refuses to accept the bill, send RETURN
                                 ByteResult = this.SendCommand(BillValidatorCommands.RETURN).ToList();
                                 this._ReturnBill = false;
                             }
                             else
                             {
                                 // STACK
-                                // Если равпознали, отправим купюру в стек (STACK)
+                                // If you have recognized, send the bill to the stack (STACK)
                                 ByteResult = this.SendCommand(BillValidatorCommands.STACK).ToList();
                             }
                         }
 
                         // STACKING
-                        // Если четвертый бит 17h, следовательно идет процесс отправки купюры в стек (STACKING)
+                        // If the fourth bit is 17h, hence the process of sending the note to the stack is going on (STACKING)
                         else if (ByteResult[3] == 0x17)
                         {
                             this.SendCommand(BillValidatorCommands.ACK);
                         }
 
                         // Bill stacked
-                        // Если четвертый бит 81h, следовательно, купюра попала в стек
+                        // If the fourth bit is 81h, therefore, the bill hit the stack
                         else if (ByteResult[3] == 0x81)
                         {
-                            // Подтветждаем
+                            // Welcome
                             this.SendCommand(BillValidatorCommands.ACK);
 
                             OnBillReceived(new BillReceivedEventArgs(BillRecievedStatus.Accepted, CashCodeTable(ByteResult[4]), ""));
                         }
 
                         // RETURNING
-                        // Если четвертый бит 18h, следовательно идет процесс возврата
+                        // If the fourth bit is 18h, hence the return process is in progress.
                         else if (ByteResult[3] == 0x18)
                         {
                             this.SendCommand(BillValidatorCommands.ACK);
                         }
 
                         // BILL RETURNING
-                        // Если четвертый бит 82h, следовательно купюра возвращена
+                        // If the fourth bit is 82h, hence the bill is returned.
                         else if (ByteResult[3] == 0x82)
                         {
                             this.SendCommand(BillValidatorCommands.ACK);
                         }
 
                         // Drop Cassette out of position
-                        // Снят купюроотстойник
+                        // Banknote withdrawn
                         else if (ByteResult[3] == 0x42)
                         {
                             if (_cassettestatus != BillCassetteStatus.Removed)
@@ -712,7 +769,7 @@ namespace CashCode.Net
                         }
 
                         // Initialize
-                        // Кассета вставлена обратно на место
+                        // The cassette is inserted back into place.
                         else if (ByteResult[3] == 0x13)
                         {
                             if (_cassettestatus == BillCassetteStatus.Removed)
@@ -725,11 +782,11 @@ namespace CashCode.Net
                     }
                 }
             }
-            catch
-            {}
+            catch (Exception)
+            { }
             finally
             {
-                // Если таймер выключен, то запускаем
+                // If the timer is off, then run
                 if (!this._Listener.Enabled && this._IsListening)
                     this._Listener.Start();
             }
@@ -740,7 +797,7 @@ namespace CashCode.Net
     }
 
     /// <summary>
-    /// Класс аргументов события получения купюры в купюроприемнике
+    /// Argument class of the event of receiving a bill in a bill acceptor
     /// </summary>
     public class BillReceivedEventArgs : EventArgs
     {

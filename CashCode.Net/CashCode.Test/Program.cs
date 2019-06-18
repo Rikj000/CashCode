@@ -14,7 +14,7 @@ namespace CashCodeTest
         {
             try
             {
-                using (CashCodeBillValidator c = new CashCodeBillValidator(CashCode.Test.Properties.Settings.Default.Port, 9600))
+                using (CashCodeBillValidator c = new CashCodeBillValidator("COM4", 9600))
                 {
                     c.BillReceived += new BillReceivedHandler(c_BillReceived);
                     c.BillStacking += new BillStackingHandler(c_BillStacking);
@@ -26,13 +26,9 @@ namespace CashCodeTest
                         c.PowerUpBillValidator();
                         c.StartListening();
 
-
                         c.EnableBillValidator();
                         Console.ReadKey();
                         c.DisableBillValidator();
-                        Console.ReadKey();
-                        c.EnableBillValidator();
-                        Console.ReadKey();
                         c.StopListening();
                     }
 
@@ -52,11 +48,11 @@ namespace CashCodeTest
 
         static void c_BillStacking(object Sender, System.ComponentModel.CancelEventArgs e)
         {
-            Console.WriteLine("Купюра в стеке");
+            Console.WriteLine("Bill in stack");
             if (Sum > 100)
             {
                 //e.Cancel = true;
-                Console.WriteLine("Превышен лимит единовременной оплаты");
+                Console.WriteLine("One-time payment limit exceeded");
             }
         }
 
@@ -69,7 +65,8 @@ namespace CashCodeTest
             else if (e.Status == BillRecievedStatus.Accepted)
             {
                 Sum += e.Value;
-                Console.WriteLine("Bill accepted! " + e.Value + " руб. Общая сумму: " + Sum.ToString());
+                // Kan zijn dat programma niet out of the box met euro's werkt maar met russische roebels
+                Console.WriteLine("Bill accepted! " + e.Value + " euro. Total amount: " + Sum.ToString());
             }
         }
 

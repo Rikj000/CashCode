@@ -1,12 +1,11 @@
 ﻿using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
 [assembly: AssemblyTitle("CashCode.Net")]
-[assembly: AssemblyDescription("Библиотека работы с купюроприемником Bill Validator with Stacker")]
+[assembly: AssemblyDescription("Library for Bill Validator with Stacker")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("Strukachev D.")]
 [assembly: AssemblyProduct("CashCode.Net")]
